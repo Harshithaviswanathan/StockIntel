@@ -1,0 +1,13 @@
+AI_Frontend/
+venv/
+__pycache__/
+*.py[cod]
+.env
+.env.*
+!.env.example
+Credentials.json
+blenderbot_model/
+saved_model/
+data/
+*.log
+api_responses.log

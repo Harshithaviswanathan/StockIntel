@@ -1,0 +1,16 @@
+fastapi
+uvicorn
+python-dotenv
+yfinance
+requests
+numpy
+pydantic
+langchain
+langchain-community
+langchain-groq
+langchain-chroma
+chromadb
+openai
+tiktoken
+ollama
+langchain-huggingface

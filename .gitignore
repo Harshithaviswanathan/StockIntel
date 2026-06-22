@@ -1,0 +1,12 @@
+# Root gitignore for StockIntel RAG monorepo
+
+.env
+.env.*
+!.env.example
+**/Credentials.json
+**/__pycache__/
+**/node_modules/
+**/dist/
+**/.venv/
+**/venv/
+*.log
