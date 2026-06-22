@@ -90,12 +90,18 @@ def get_stock_financials(ticker_obj):
 
 # Add CORS middleware (configure ALLOWED_ORIGINS for production, comma-separated)
 from app.config import ALLOWED_ORIGINS as _allowed_origins_env
-_allowed_origins = _allowed_origins_env
-_cors_origins = ["*"] if _allowed_origins.strip() == "*" else [o.strip() for o in _allowed_origins.split(",") if o.strip()]
+_allowed_origins_raw = _allowed_origins_env.strip()
+if _allowed_origins_raw == "*":
+    _cors_origins = ["*"]
+    _allow_credentials = False  # browsers reject credentials with wildcard origin
+else:
+    _cors_origins = [o.strip() for o in _allowed_origins_raw.split(",") if o.strip()]
+    _allow_credentials = True
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
-    allow_credentials=True,
+    allow_credentials=_allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )
