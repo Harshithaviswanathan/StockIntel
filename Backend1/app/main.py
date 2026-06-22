@@ -90,18 +90,24 @@ def get_stock_financials(ticker_obj):
 
 # Add CORS middleware (configure ALLOWED_ORIGINS for production, comma-separated)
 from app.config import ALLOWED_ORIGINS as _allowed_origins_env
+
+def _clean_origin(value: str) -> str:
+    return value.strip().strip('"').strip("'")
+
 _allowed_origins_raw = _allowed_origins_env.strip()
+# Always permit Vercel production + preview URLs and local dev
+_origin_regex = r"https://.*\.vercel\.app|http://localhost(:\d+)?"
+
 if _allowed_origins_raw == "*":
     _cors_origins = ["*"]
-    _allow_credentials = False  # browsers reject credentials with wildcard origin
 else:
-    _cors_origins = [o.strip() for o in _allowed_origins_raw.split(",") if o.strip()]
-    _allow_credentials = True
+    _cors_origins = [_clean_origin(o) for o in _allowed_origins_raw.split(",") if o.strip()]
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
-    allow_credentials=_allow_credentials,
+    allow_origin_regex=_origin_regex,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
