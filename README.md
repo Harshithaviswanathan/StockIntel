@@ -65,12 +65,5 @@ npm run dev
 - 🤖 Automated portfolio management
 - 📈 Investment strategy development
 
-## 📖 About
 
-The system represents a convergence of machine learning, financial data analysis, and artificial intelligence, offering a powerful tool for extracting meaningful insights from complex financial landscapes.
-
----
-<img width="800" height="505" alt="image" src="https://github.com/user-attachments/assets/55314ad1-f220-4689-b05d-8689d16315af" /> 
-
-<img width="349" height="500" alt="image" src="https://github.com/user-attachments/assets/8d2fc7ff-5bfa-4d4c-b2e3-aba6f40dc10e" /> <img width="366" height="502" alt="image" src="https://github.com/user-attachments/assets/364385ee-c6cc-40a2-a226-5a42663680c6" /> 
 
