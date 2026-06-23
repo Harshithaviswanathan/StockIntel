@@ -24,3 +24,7 @@ services:
         value: "False"
       - key: ALLOWED_ORIGINS
         value: "*"
+      - key: HF_HOME
+        value: /opt/render/project/src/.cache/huggingface
+      - key: SENTENCE_TRANSFORMERS_HOME
+        value: /opt/render/project/src/.cache/sentence_transformers

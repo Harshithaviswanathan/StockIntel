@@ -156,6 +156,9 @@ async def ensure_cors_headers(request: Request, call_next):
 
 _embeddings_ready = False
 _embeddings_error: str | None = None
+_shared_embeddings = None
+_shared_vectordb = None
+_init_lock = __import__("threading").Lock()
 
 # Simple vector store setup
 def setup_embeddings():
@@ -165,6 +168,7 @@ def setup_embeddings():
         model_kwargs={'device': 'cpu'},
         encode_kwargs={'normalize_embeddings': True}
     )
+
 def setup_vectordb(embeddings, persist_directory=None):
     import chromadb
     from langchain_chroma import Chroma
@@ -178,12 +182,43 @@ def setup_vectordb(embeddings, persist_directory=None):
         collection_name="stock_documents",
     )
 
+def get_shared_embeddings():
+    """Load embedding model once per process (expensive — do not call on /health)."""
+    global _shared_embeddings, _embeddings_ready, _embeddings_error
+    if _shared_embeddings is not None:
+        return _shared_embeddings
+    with _init_lock:
+        if _shared_embeddings is not None:
+            return _shared_embeddings
+        try:
+            print("Loading embedding model (one-time)...")
+            _shared_embeddings = setup_embeddings()
+            _embeddings_ready = True
+            _embeddings_error = None
+            print("✅ Embedding model loaded")
+        except Exception as exc:
+            _embeddings_ready = False
+            _embeddings_error = str(exc)
+            raise
+    return _shared_embeddings
+
+def get_shared_vectordb():
+    """Return shared Chroma instance; initializes embeddings lazily on first use."""
+    global _shared_vectordb
+    if _shared_vectordb is not None:
+        return _shared_vectordb
+    with _init_lock:
+        if _shared_vectordb is not None:
+            return _shared_vectordb
+        _shared_vectordb = setup_vectordb(get_shared_embeddings())
+    return _shared_vectordb
+
 # Add this class definition to your main.py file before the endpoints
 class VectorStoreManager:
     def __init__(self):
         """Initialize the vector store manager"""
-        self.embeddings = setup_embeddings()
-        self.vectordb = setup_vectordb(self.embeddings)
+        self.embeddings = get_shared_embeddings()
+        self.vectordb = get_shared_vectordb()
     
     def clear_collection(self, ticker):
         """Clear only documents for a specific ticker"""
@@ -340,24 +375,13 @@ class DataIngestor:
 # Initialize components at startup
 @app.on_event("startup")
 async def startup_event():
-    global _embeddings_ready, _embeddings_error
     print("Initializing components...")
     groq_status = check_groq_api_key()
     if groq_status["valid"]:
         print("✅ Groq API key validated")
     else:
         print(f"⚠️ Groq API key issue: {groq_status['message']}")
-
-    try:
-        embeddings = setup_embeddings()
-        setup_vectordb(embeddings)
-        _embeddings_ready = True
-        _embeddings_error = None
-        print("✅ Components initialized successfully")
-    except Exception as e:
-        _embeddings_ready = False
-        _embeddings_error = str(e)
-        print(f"❌ Error initializing components: {e}")
+    print("✅ Server ready (embedding model loads on first RAG request)")
 
 # Root endpoint to display all routes
 @app.get("/")
@@ -461,8 +485,7 @@ async def rag_query(request: RAGQueryRequest):
     """Query the RAG system for stock information"""
     try:
         # Initialize components
-        embeddings = setup_embeddings()
-        vectordb = setup_vectordb(embeddings)
+        vectordb = get_shared_vectordb()
         
         # Format the query
         query = request.question
@@ -556,8 +579,7 @@ async def agent_query(request: AgentQueryRequest):
     """Run the stock agent with a user query"""
     try:
         # Initialize components
-        embeddings = setup_embeddings()
-        vectordb = setup_vectordb(embeddings)
+        vectordb = get_shared_vectordb()
         
         # Get relevant documents from the database
         docs = vectordb.similarity_search(request.query, k=2)
@@ -624,8 +646,7 @@ async def comprehensive_analysis(ticker: str):
         require_groq_api_key()
 
         # Initialize components
-        embeddings = setup_embeddings()
-        vectordb = setup_vectordb(embeddings)
+        vectordb = get_shared_vectordb()
         
         # Try to refresh vector data; continue with existing docs if Yahoo Finance fails
         data_ingester = DataIngestor()
@@ -826,8 +847,7 @@ async def list_documents(ticker: str):
     """List documents in the vector database for a specific ticker"""
     try:
         # Initialize components
-        embeddings = setup_embeddings()
-        vectordb = setup_vectordb(embeddings)
+        vectordb = get_shared_vectordb()
         
         # Query for documents with the ticker
         results = vectordb.similarity_search(ticker, k=20)
@@ -854,8 +874,7 @@ async def optimize_portfolio(request: PortfolioOptimizationRequest):
         require_groq_api_key()
 
         # Initialize components
-        embeddings = setup_embeddings()
-        vectordb = setup_vectordb(embeddings)
+        vectordb = get_shared_vectordb()
         
         # Gather data for each ticker
         tickers_data = {}
