@@ -10,7 +10,7 @@ import numpy as np
 import time
 from functools import wraps
 from typing import Callable, Any
-from app.config import VECTOR_DB_PATH, DEBUG, PORT, DEFAULT_LLM_MODEL, require_groq_api_key
+from app.config import VECTOR_DB_PATH, DEBUG, PORT, DEFAULT_LLM_MODEL, require_groq_api_key, check_groq_api_key
 from app.utils import extract_tickers_from_query
 
 app = FastAPI(title="StockIntel RAG API", version="1.0.0")
@@ -76,7 +76,8 @@ def get_stock_history(ticker_obj, period: str = "1y"):
 @retry_yfinance_call(max_retries=3, base_delay=2.0, backoff_factor=2.0)
 def get_stock_info(ticker_obj):
     """Get stock info with retry logic"""
-    return ticker_obj.info
+    info = ticker_obj.info
+    return info if isinstance(info, dict) else {}
 
 # Helper function to safely get financials with retry logic
 @retry_yfinance_call(max_retries=3, base_delay=2.0, backoff_factor=2.0)
@@ -169,6 +170,12 @@ class VectorStoreManager:
         print(f"Added {len(texts)} documents to vector database")
         return True
 
+def _company_info(stock_data: dict | None) -> dict:
+    if not stock_data:
+        return {}
+    company_info = stock_data.get("company_info")
+    return company_info if isinstance(company_info, dict) else {}
+
 class DataIngestor:
     def __init__(self):
         """Initialize data ingestor with vector store manager"""
@@ -209,16 +216,17 @@ class DataIngestor:
             return []
 
         documents = []
+        company_info = _company_info(stock_data)
 
         # Company overview
         company_doc = f"""
         Stock Ticker: {stock_data.get('ticker', 'N/A')}
         
         Company Overview:
-        - Name: {stock_data.get('company_info', {}).get('longName', 'N/A')}
-        - Sector: {stock_data.get('company_info', {}).get('sector', 'N/A')}
-        - Industry: {stock_data.get('company_info', {}).get('industry', 'N/A')}
-        - Description: {stock_data.get('company_info', {}).get('longBusinessSummary', 'No description available')}
+        - Name: {company_info.get('longName', 'N/A')}
+        - Sector: {company_info.get('sector', 'N/A')}
+        - Industry: {company_info.get('industry', 'N/A')}
+        - Description: {company_info.get('longBusinessSummary', 'No description available')}
         """
         documents.append(company_doc)
 
@@ -264,9 +272,18 @@ class DataIngestor:
 
         # Fetch stock data
         stock_data = self.fetch_stock_data(ticker)
+        if not stock_data:
+            raise ValueError(
+                "Could not fetch stock data from Yahoo Finance. "
+                "It may be rate-limiting — wait 2-3 minutes and retry."
+            )
 
         # Prepare document texts
         documents = self.prepare_document_text(stock_data)
+        if not documents:
+            raise ValueError(
+                "No documents could be built from stock data. Try again in a few minutes."
+            )
 
         # Prepare metadata
         metadata = [{"ticker": ticker, "type": "stock_info"} for _ in documents]
@@ -280,8 +297,13 @@ class DataIngestor:
 @app.on_event("startup")
 async def startup_event():
     print("Initializing components...")
+    groq_status = check_groq_api_key()
+    if groq_status["valid"]:
+        print("✅ Groq API key validated")
+    else:
+        print(f"⚠️ Groq API key issue: {groq_status['message']}")
+
     try:
-        # Initialize embeddings and vector store
         embeddings = setup_embeddings()
         vectordb = setup_vectordb(embeddings)
         print("✅ Components initialized successfully")
@@ -308,7 +330,6 @@ async def test():
 
 @app.get("/health")
 async def health():
-    from app.config import GROQ_API_KEY
     import chromadb
 
     vector_path = VECTOR_DB_PATH
@@ -322,9 +343,23 @@ async def health():
         except Exception:
             doc_count = 0
 
+    groq_status = check_groq_api_key()
+    embeddings_ok = True
+    try:
+        setup_embeddings()
+    except Exception as exc:
+        embeddings_ok = False
+        embeddings_error = str(exc)
+    else:
+        embeddings_error = None
+
     return {
-        "status": "ok",
-        "groq_configured": bool(GROQ_API_KEY),
+        "status": "ok" if groq_status["valid"] and embeddings_ok else "degraded",
+        "groq_configured": groq_status["configured"],
+        "groq_valid": groq_status["valid"],
+        "groq_message": groq_status["message"],
+        "embeddings_ok": embeddings_ok,
+        "embeddings_error": embeddings_error,
         "vector_db_path": vector_path,
         "vector_db_exists": vector_exists,
         "document_count": doc_count,
@@ -357,7 +392,16 @@ async def ingest_stock_data(request: IngestDataRequest):
         print(f"Ingesting data for ticker: {request.ticker}")
         success = data_ingester.fetch_and_ingest_all_data(request.ticker)
         print(f"Ingestion result: {success}")
+        if not success:
+            return {
+                "success": False,
+                "error": "Ingestion completed but no documents were stored.",
+                "ticker": request.ticker,
+            }
         return {"success": success, "ticker": request.ticker}
+    except ValueError as e:
+        print(f"Ingestion validation error: {e}")
+        return {"success": False, "error": str(e), "ticker": request.ticker}
     except Exception as e:
         print(f"Error ingesting data: {e}")
         print(traceback.format_exc())
@@ -405,20 +449,19 @@ async def rag_query(request: RAGQueryRequest):
             "answer": answer,
             "sources": sources
         }
+    except ValueError as e:
+        return {"error": str(e)}
     except Exception as e:
         print(f"Error querying RAG system: {e}")
         print(traceback.format_exc())
         return {"error": str(e)}
 
 def call_groq_api(prompt, model=None):
-    """Call Groq API directly"""
+    """Call Groq API directly. Raises ValueError when the key or request is invalid."""
     import requests
 
     model = model or DEFAULT_LLM_MODEL
-    try:
-        api_key = require_groq_api_key()
-    except ValueError as e:
-        return str(e)
+    api_key = require_groq_api_key()
 
     if DEBUG:
         print("Groq API request initiated")
@@ -441,14 +484,23 @@ def call_groq_api(prompt, model=None):
     response = requests.post(
         "https://api.groq.com/openai/v1/chat/completions",
         headers=headers,
-        json=payload
+        json=payload,
+        timeout=60,
     )
     
     if response.status_code == 200:
         return response.json()["choices"][0]["message"]["content"]
-    else:
-        print(f"Error from Groq API: {response.status_code} - {response.text}")
-        return f"Error generating response. API returned status code {response.status_code}."
+
+    print(f"Error from Groq API: {response.status_code} - {response.text}")
+    if response.status_code == 401:
+        raise ValueError(
+            "Invalid Groq API key. Create a new key at console.groq.com and update GROQ_API_KEY in Render."
+        )
+    try:
+        detail = response.json().get("error", {}).get("message", response.text)
+    except Exception:
+        detail = response.text
+    raise ValueError(f"Groq API error ({response.status_code}): {detail}")
 
 # Agent query endpoint
 @app.post("/rag/agent_query")
@@ -480,7 +532,7 @@ async def agent_query(request: AgentQueryRequest):
                     stock = get_stock_ticker(ticker)
                     hist = get_stock_history(stock, period="1d")
                     price = hist["Close"].iloc[-1]
-                    info = get_stock_info(stock)
+                    info = get_stock_info(stock) or {}
                     
                     ticker_info += f"- {ticker}: ${price:.2f}\n"
                     ticker_info += f"  P/E Ratio: {info.get('trailingPE', 'N/A')}\n"
@@ -510,6 +562,8 @@ async def agent_query(request: AgentQueryRequest):
         response = call_groq_api(prompt)
         
         return {"result": response}
+    except ValueError as e:
+        return {"error": str(e)}
     except Exception as e:
         print(f"Error in agent query: {e}")
         print(traceback.format_exc())
@@ -519,20 +573,29 @@ async def agent_query(request: AgentQueryRequest):
 async def comprehensive_analysis(ticker: str):
     """Perform a comprehensive analysis of a stock"""
     try:
+        require_groq_api_key()
+
         # Initialize components
         embeddings = setup_embeddings()
         vectordb = setup_vectordb(embeddings)
         
-        # Ensure data is ingested
+        # Try to refresh vector data; continue with existing docs if Yahoo Finance fails
         data_ingester = DataIngestor()
-        data_ingester.fetch_and_ingest_all_data(ticker)
+        try:
+            data_ingester.fetch_and_ingest_all_data(ticker)
+        except ValueError as e:
+            print(f"Ingest skipped during comprehensive analysis for {ticker}: {e}")
         
-        # Get stock data
+        # Get stock data for structured fields
         stock_data = data_ingester.fetch_stock_data(ticker)
-        
-        # Get relevant docs from vector store for fundamental analysis
+        company_info = _company_info(stock_data)
         docs = vectordb.similarity_search(f"{ticker} company financials", k=3)
         fundamental_context = "\n\n".join([doc.page_content for doc in docs])
+        if not fundamental_context.strip():
+            fundamental_context = (
+                f"Limited vector data for {ticker}. "
+                "Use general market knowledge and the live technical data below."
+            )
         
         # Get live data using yfinance for technical analysis
         import numpy as np
@@ -670,11 +733,11 @@ async def comprehensive_analysis(ticker: str):
         outlook = call_groq_api(outlook_prompt)
         
         # Extract basic information for structured response
-        company_name = stock_data.get("company_info", {}).get("longName", ticker)
-        sector = stock_data.get("company_info", {}).get("sector", "N/A")
-        market_cap = stock_data.get("company_info", {}).get("marketCap", 0)
-        pe_ratio = stock_data.get("company_info", {}).get("trailingPE", "N/A")
-        eps = stock_data.get("company_info", {}).get("trailingEps", "N/A")
+        company_name = company_info.get("longName", ticker)
+        sector = company_info.get("sector", "N/A")
+        market_cap = company_info.get("marketCap", 0)
+        pe_ratio = company_info.get("trailingPE", "N/A")
+        eps = company_info.get("trailingEps", "N/A")
         
         # Create structured response
         response = {
@@ -703,6 +766,8 @@ async def comprehensive_analysis(ticker: str):
         }
         
         return response
+    except ValueError as e:
+        return {"error": str(e), "ticker": ticker}
     except Exception as e:
         print(f"Error in comprehensive analysis: {e}")
         print(traceback.format_exc())
@@ -738,6 +803,8 @@ async def list_documents(ticker: str):
 async def optimize_portfolio(request: PortfolioOptimizationRequest):
     """Optimize a portfolio using the RAG agent"""
     try:
+        require_groq_api_key()
+
         # Initialize components
         embeddings = setup_embeddings()
         vectordb = setup_vectordb(embeddings)
@@ -753,7 +820,7 @@ async def optimize_portfolio(request: PortfolioOptimizationRequest):
             try:
                 stock = get_stock_ticker(ticker)
                 hist_1d = get_stock_history(stock, period="1d")
-                info = get_stock_info(stock)
+                info = get_stock_info(stock) or {}
                 
                 current_data = {
                     "price": hist_1d["Close"].iloc[-1],
@@ -899,6 +966,8 @@ async def optimize_portfolio(request: PortfolioOptimizationRequest):
             "optimized_portfolio": optimized_portfolio,
             "analysis": analysis
         }
+    except ValueError as e:
+        return {"error": str(e)}
     except Exception as e:
         print(f"Error optimizing portfolio: {e}")
         print(traceback.format_exc())

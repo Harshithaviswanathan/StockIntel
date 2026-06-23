@@ -25,4 +25,48 @@ def require_groq_api_key() -> str:
         raise ValueError(
             "GROQ_API_KEY is not set. Add it to Backend1/.env or your deployment environment."
         )
+    if not GROQ_API_KEY.startswith("gsk_"):
+        raise ValueError(
+            "GROQ_API_KEY looks invalid (must start with gsk_). Update it in Render → Environment."
+        )
     return GROQ_API_KEY
+
+
+def check_groq_api_key() -> dict:
+    """Validate Groq key presence and acceptability (lightweight API ping)."""
+    if not GROQ_API_KEY:
+        return {
+            "configured": False,
+            "valid": False,
+            "message": "GROQ_API_KEY is not set on the server",
+        }
+    if not GROQ_API_KEY.startswith("gsk_"):
+        return {
+            "configured": True,
+            "valid": False,
+            "message": "GROQ_API_KEY format invalid (must start with gsk_)",
+        }
+
+    try:
+        import requests
+
+        response = requests.get(
+            "https://api.groq.com/openai/v1/models",
+            headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
+            timeout=8,
+        )
+        if response.status_code == 200:
+            return {"configured": True, "valid": True, "message": "ok"}
+        if response.status_code == 401:
+            return {
+                "configured": True,
+                "valid": False,
+                "message": "Groq rejected the API key — create a new key at console.groq.com and update Render",
+            }
+        return {
+            "configured": True,
+            "valid": False,
+            "message": f"Groq API check failed with status {response.status_code}",
+        }
+    except Exception as exc:
+        return {"configured": True, "valid": False, "message": str(exc)}

@@ -54,14 +54,24 @@ export const AppShell: React.FC<AppShellProps> = ({
   children,
 }) => {
   const [backendOnline, setBackendOnline] = useState<boolean | null>(null);
+  const [groqValid, setGroqValid] = useState<boolean | null>(null);
+  const [groqMessage, setGroqMessage] = useState<string | null>(null);
 
   useEffect(() => {
     const checkBackend = async () => {
       try {
-        await axios.get(`${API_BASE_URL}/health`, { timeout: 5000 });
+        const response = await axios.get<{
+          status?: string;
+          groq_valid?: boolean;
+          groq_message?: string;
+        }>(`${API_BASE_URL}/health`, { timeout: 8000 });
         setBackendOnline(true);
+        setGroqValid(response.data.groq_valid ?? null);
+        setGroqMessage(response.data.groq_message ?? null);
       } catch {
         setBackendOnline(false);
+        setGroqValid(null);
+        setGroqMessage(null);
       }
     };
 
@@ -171,27 +181,34 @@ export const AppShell: React.FC<AppShellProps> = ({
                 <Badge
                   variant="outline"
                   className={`gap-2 border-white/10 ${
-                    backendOnline === true
+                    backendOnline === true && groqValid !== false
                       ? "text-emerald-400"
                       : backendOnline === false
                         ? "text-red-400"
-                        : "text-slate-400"
+                        : groqValid === false
+                          ? "text-amber-400"
+                          : "text-slate-400"
                   }`}
+                  title={groqValid === false ? groqMessage ?? undefined : undefined}
                 >
                   <span
                     className={`h-2 w-2 rounded-full ${
-                      backendOnline === true
+                      backendOnline === true && groqValid !== false
                         ? "animate-pulse bg-emerald-400"
                         : backendOnline === false
                           ? "bg-red-400"
-                          : "bg-slate-500"
+                          : groqValid === false
+                            ? "bg-amber-400"
+                            : "bg-slate-500"
                     }`}
                   />
-                  {backendOnline === true
-                    ? "Live"
-                    : backendOnline === false
-                      ? "Offline"
-                      : "Connecting"}
+                  {backendOnline === false
+                    ? "Offline"
+                    : groqValid === false
+                      ? "Groq Key Invalid"
+                      : backendOnline === true
+                        ? "Live"
+                        : "Connecting"}
                 </Badge>
               </div>
             </div>
