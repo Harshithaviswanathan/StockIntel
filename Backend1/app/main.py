@@ -15,7 +15,7 @@ from app.config import VECTOR_DB_PATH, DEBUG, PORT, DEFAULT_LLM_MODEL, require_g
 from app.utils import extract_tickers_from_query
 
 app = FastAPI(title="StockIntel RAG API", version="1.2.0")
-APP_BUILD = "lazy-embeddings-v2"
+APP_BUILD = "fastembed-v3"
 
 load_dotenv()
 
@@ -163,12 +163,9 @@ _init_lock = __import__("threading").Lock()
 
 # Simple vector store setup
 def setup_embeddings():
-    from langchain_huggingface import HuggingFaceEmbeddings
-    return HuggingFaceEmbeddings(
-        model_name="sentence-transformers/paraphrase-MiniLM-L3-v2",  # Smaller model
-        model_kwargs={'device': 'cpu'},
-        encode_kwargs={'normalize_embeddings': True}
-    )
+    """ONNX-based embeddings — ~10x less RAM than PyTorch sentence-transformers."""
+    from langchain_community.embeddings import FastEmbedEmbeddings
+    return FastEmbedEmbeddings(model_name="BAAI/bge-small-en-v1.5")
 
 def setup_vectordb(embeddings, persist_directory=None):
     import chromadb

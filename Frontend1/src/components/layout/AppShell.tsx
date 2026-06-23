@@ -54,18 +54,37 @@ export const AppShell: React.FC<AppShellProps> = ({
   children,
 }) => {
   const [backendOnline, setBackendOnline] = useState<boolean | null>(null);
+  const [backendBuild, setBackendBuild] = useState<string | null>(null);
   const [groqValid, setGroqValid] = useState<boolean | null>(null);
   const [groqMessage, setGroqMessage] = useState<string | null>(null);
+
+  const EXPECTED_BUILD = "fastembed-v3";
 
   useEffect(() => {
     const checkBackend = async () => {
       try {
-        await axios.get(`${API_BASE_URL}/health`, { timeout: 15000 });
-        setBackendOnline(true);
+        const response = await axios.get<{ status?: string; build?: string }>(
+          `${API_BASE_URL}/health`,
+          { timeout: 15000 }
+        );
+        const build = response.data.build ?? null;
+        setBackendBuild(build);
+        const buildOk = build === EXPECTED_BUILD;
+        setBackendOnline(response.data.status === "ok" && buildOk);
+        if (!buildOk) {
+          setGroqValid(null);
+          setGroqMessage(
+            build
+              ? `Backend deploy outdated (${build}). Redeploy Render from latest GitHub commit.`
+              : "Backend running old code without build marker. Redeploy Render."
+          );
+          return;
+        }
       } catch {
         setBackendOnline(false);
+        setBackendBuild(null);
         setGroqValid(null);
-        setGroqMessage(null);
+        setGroqMessage("Backend unreachable — Render may be waking up or deactivated.");
         return;
       }
 
@@ -74,7 +93,7 @@ export const AppShell: React.FC<AppShellProps> = ({
           status?: string;
           groq_valid?: boolean;
           groq_message?: string;
-        }>(`${API_BASE_URL}/health/status`, { timeout: 15000 });
+        }>(`${API_BASE_URL}/health/status`, { timeout: 20000 });
         setGroqValid(response.data.groq_valid ?? null);
         setGroqMessage(response.data.groq_message ?? null);
       } catch {
@@ -197,7 +216,7 @@ export const AppShell: React.FC<AppShellProps> = ({
                           ? "text-amber-400"
                           : "text-slate-400"
                   }`}
-                  title={groqValid === false ? groqMessage ?? undefined : undefined}
+                  title={groqMessage ?? undefined}
                 >
                   <span
                     className={`h-2 w-2 rounded-full ${
@@ -211,7 +230,9 @@ export const AppShell: React.FC<AppShellProps> = ({
                     }`}
                   />
                   {backendOnline === false
-                    ? "Offline"
+                    ? backendBuild && backendBuild !== EXPECTED_BUILD
+                      ? "Redeploy Backend"
+                      : "Offline"
                     : groqValid === false
                       ? "Groq Key Invalid"
                       : backendOnline === true

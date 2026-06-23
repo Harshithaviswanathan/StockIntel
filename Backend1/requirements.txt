@@ -13,5 +13,5 @@ chromadb
 openai
 tiktoken
 ollama
-langchain-huggingface
-sentence-transformers
+fastembed
+onnxruntime
