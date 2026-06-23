@@ -58,7 +58,7 @@ export const AppShell: React.FC<AppShellProps> = ({
   const [groqValid, setGroqValid] = useState<boolean | null>(null);
   const [groqMessage, setGroqMessage] = useState<string | null>(null);
 
-  const EXPECTED_BUILD = "groq-first-v4";
+  const EXPECTED_BUILD = "lite-v5";
 
   useEffect(() => {
     const checkBackend = async () => {

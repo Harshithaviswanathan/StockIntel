@@ -11,11 +11,11 @@ import numpy as np
 import time
 from functools import wraps
 from typing import Callable, Any
-from app.config import VECTOR_DB_PATH, DEBUG, PORT, DEFAULT_LLM_MODEL, require_groq_api_key, check_groq_api_key
+from app.config import VECTOR_DB_PATH, DEBUG, PORT, DEFAULT_LLM_MODEL, ENABLE_RAG, require_groq_api_key, check_groq_api_key
 from app.utils import extract_tickers_from_query
 
 app = FastAPI(title="StockIntel RAG API", version="1.2.0")
-APP_BUILD = "groq-first-v4"
+APP_BUILD = "lite-v5"
 
 load_dotenv()
 
@@ -202,6 +202,11 @@ def get_shared_embeddings():
 
 def get_shared_vectordb():
     """Return shared Chroma instance; initializes embeddings lazily on first use."""
+    if not ENABLE_RAG:
+        raise ValueError(
+            "Vector RAG is disabled on this server (ENABLE_RAG=false). "
+            "Use AI Agent, Analysis, and Portfolio — they run on Groq + Yahoo Finance."
+        )
     global _shared_vectordb
     if _shared_vectordb is not None:
         return _shared_vectordb
@@ -212,7 +217,9 @@ def get_shared_vectordb():
     return _shared_vectordb
 
 def try_rag_search(query: str, k: int = 2) -> tuple[str, list]:
-    """Optional RAG lookup — returns empty context if embeddings/vector store unavailable."""
+    """Optional RAG lookup — skipped entirely when ENABLE_RAG=false."""
+    if not ENABLE_RAG:
+        return "", []
     try:
         vectordb = get_shared_vectordb()
         docs = vectordb.similarity_search(query, k=k)
@@ -474,7 +481,13 @@ async def test_groq():
 @app.get("/health")
 async def health():
     """Fast health check for Render deploy probes — must respond in under 5 seconds."""
-    return {"status": "ok", "service": "stockintel-api", "build": APP_BUILD}
+    return {
+        "status": "ok",
+        "service": "stockintel-api",
+        "build": APP_BUILD,
+        "mode": "full-rag" if ENABLE_RAG else "lite",
+        "rag_enabled": ENABLE_RAG,
+    }
 
 
 @app.get("/health/status")
@@ -496,7 +509,10 @@ async def health_status():
     groq_status = check_groq_api_key()
 
     return {
-        "status": "ok" if groq_status["valid"] and _embeddings_ready else "degraded",
+        "status": "ok" if groq_status["valid"] else "degraded",
+        "mode": "full-rag" if ENABLE_RAG else "lite",
+        "rag_enabled": ENABLE_RAG,
+        "build": APP_BUILD,
         "groq_configured": groq_status["configured"],
         "groq_valid": groq_status["valid"],
         "groq_message": groq_status["message"],
@@ -527,6 +543,15 @@ class PortfolioOptimizationRequest(BaseModel):
 @app.post("/rag/ingest_stock_data")
 async def ingest_stock_data(request: IngestDataRequest):
     """Ingest data for a specific stock into the RAG system"""
+    if not ENABLE_RAG:
+        return {
+            "success": False,
+            "error": (
+                "Document ingest is disabled on Render free tier (ENABLE_RAG=false). "
+                "AI Agent, Analysis, and Portfolio work without ingest."
+            ),
+            "ticker": request.ticker,
+        }
     try:
         # Create a new DataIngestor instance
         data_ingester = DataIngestor()
@@ -553,6 +578,13 @@ async def ingest_stock_data(request: IngestDataRequest):
 @app.post("/rag/query")
 async def rag_query(request: RAGQueryRequest):
     """Query the RAG system for stock information"""
+    if not ENABLE_RAG:
+        return {
+            "error": (
+                "Document RAG query is disabled on this deployment. "
+                "Switch to AI Agent mode — it uses Groq + live Yahoo Finance data."
+            )
+        }
     try:
         # Initialize components
         vectordb = get_shared_vectordb()

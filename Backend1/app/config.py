@@ -12,6 +12,8 @@ ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "*")
 DEBUG = os.getenv("DEBUG", "False").lower() in ("true", "1", "yes")
 PORT = int(os.getenv("PORT", "8000"))
 DEFAULT_LLM_MODEL = os.getenv("DEFAULT_LLM_MODEL", "llama-3.1-8b-instant")
+# Set ENABLE_RAG=true locally for full vector search. Render free tier: keep false.
+ENABLE_RAG = os.getenv("ENABLE_RAG", "false").lower() in ("true", "1", "yes")
 
 for _path in (VECTOR_DB_PATH, RAG_DATA_PATH):
     try:
