@@ -15,7 +15,7 @@ from app.config import VECTOR_DB_PATH, DEBUG, PORT, DEFAULT_LLM_MODEL, require_g
 from app.utils import extract_tickers_from_query
 
 app = FastAPI(title="StockIntel RAG API", version="1.2.0")
-APP_BUILD = "fastembed-v3"
+APP_BUILD = "groq-first-v4"
 
 load_dotenv()
 
@@ -211,6 +211,62 @@ def get_shared_vectordb():
         _shared_vectordb = setup_vectordb(get_shared_embeddings())
     return _shared_vectordb
 
+def try_rag_search(query: str, k: int = 2) -> tuple[str, list]:
+    """Optional RAG lookup — returns empty context if embeddings/vector store unavailable."""
+    try:
+        vectordb = get_shared_vectordb()
+        docs = vectordb.similarity_search(query, k=k)
+        context = "\n\n".join(doc.page_content for doc in docs)
+        sources = [doc.metadata for doc in docs]
+        return context, sources
+    except Exception as exc:
+        print(f"RAG search skipped: {exc}")
+        return "", []
+
+def _format_ticker_market_data(tickers: list[str]) -> str:
+    """Live Yahoo Finance snapshot for prompt context."""
+    if not tickers:
+        return ""
+    lines = ["Current market data:"]
+    for ticker in tickers:
+        try:
+            stock = get_stock_ticker(ticker)
+            hist = get_stock_history(stock, period="1d")
+            price = hist["Close"].iloc[-1]
+            info = get_stock_info(stock) or {}
+            lines.append(f"- {ticker}: ${price:.2f}")
+            lines.append(f"  P/E Ratio: {info.get('trailingPE', 'N/A')}")
+            lines.append(f"  Market Cap: ${info.get('marketCap', 0) / 1e9:.2f}B")
+        except yf.exceptions.YFRateLimitError:
+            lines.append(f"- {ticker}: Rate limited. Please try again later.")
+        except Exception as exc:
+            lines.append(f"- {ticker}: Error retrieving data: {exc}")
+    return "\n".join(lines)
+
+def _build_fundamental_context(ticker: str, company_info: dict, stock_data: dict | None) -> str:
+    """Fundamental context from Yahoo Finance, with optional ingested RAG docs."""
+    parts = [
+        f"Ticker: {ticker}",
+        f"Company: {company_info.get('longName', ticker)}",
+        f"Sector: {company_info.get('sector', 'N/A')}",
+        f"Industry: {company_info.get('industry', 'N/A')}",
+        f"P/E Ratio: {company_info.get('trailingPE', 'N/A')}",
+        f"EPS: {company_info.get('trailingEps', 'N/A')}",
+        f"Market Cap: {company_info.get('marketCap', 'N/A')}",
+    ]
+    summary = company_info.get("longBusinessSummary")
+    if summary:
+        parts.append(f"Business summary: {summary[:1500]}")
+
+    rag_context, _ = try_rag_search(f"{ticker} company financials", k=3)
+    if rag_context.strip():
+        parts.append(f"Ingested research:\n{rag_context}")
+    elif not stock_data:
+        parts.append(
+            "Limited live data available. Use well-known public information about this company."
+        )
+    return "\n".join(parts)
+
 # Add this class definition to your main.py file before the endpoints
 class VectorStoreManager:
     def __init__(self):
@@ -255,8 +311,14 @@ def _company_info(stock_data: dict | None) -> dict:
 
 class DataIngestor:
     def __init__(self):
-        """Initialize data ingestor with vector store manager"""
-        self.vector_store_manager = VectorStoreManager()
+        """Initialize data ingestor; vector store loads only when ingesting."""
+        self._vector_store_manager: VectorStoreManager | None = None
+
+    @property
+    def vector_store_manager(self) -> VectorStoreManager:
+        if self._vector_store_manager is None:
+            self._vector_store_manager = VectorStoreManager()
+        return self._vector_store_manager
 
     def fetch_stock_data(self, ticker: str, period: str = "1y"):
         """Fetch stock data for a given ticker"""
@@ -397,6 +459,16 @@ async def root():
 @app.get("/test")
 async def test():
     return {"message": "Test endpoint working!"}
+
+
+@app.get("/test/groq")
+async def test_groq():
+    """Verify Groq works without loading embeddings (safe on Render free tier)."""
+    try:
+        result = call_groq_api("Reply with exactly: Groq is working on Render.")
+        return {"ok": True, "result": result, "build": APP_BUILD}
+    except ValueError as e:
+        return {"ok": False, "error": str(e), "build": APP_BUILD}
 
 
 @app.get("/health")
@@ -576,41 +648,18 @@ def call_groq_api(prompt, model=None):
 async def agent_query(request: AgentQueryRequest):
     """Run the stock agent with a user query"""
     try:
-        # Initialize components
-        vectordb = get_shared_vectordb()
-        
-        # Get relevant documents from the database
-        docs = vectordb.similarity_search(request.query, k=2)
-        # Limit context length
+        require_groq_api_key()
+
+        context, _ = try_rag_search(request.query, k=2)
         max_tokens = 2000
-        context = "\n\n".join([doc.page_content for doc in docs])
         if len(context) > max_tokens:
             context = context[:max_tokens] + "..."
-        
-        # Extract ticker symbols from the query (skip common English words)
+        if not context.strip():
+            context = "No ingested documents yet — use live market data and general financial knowledge."
+
         tickers = extract_tickers_from_query(request.query)
-        ticker_info = ""
+        ticker_info = _format_ticker_market_data(tickers)
         
-        # If we have ticker symbols, get current data for them
-        if tickers:
-            ticker_info = "Current market data:\n"
-            
-            for ticker in tickers:
-                try:
-                    stock = get_stock_ticker(ticker)
-                    hist = get_stock_history(stock, period="1d")
-                    price = hist["Close"].iloc[-1]
-                    info = get_stock_info(stock) or {}
-                    
-                    ticker_info += f"- {ticker}: ${price:.2f}\n"
-                    ticker_info += f"  P/E Ratio: {info.get('trailingPE', 'N/A')}\n"
-                    ticker_info += f"  Market Cap: ${info.get('marketCap', 0)/1e9:.2f}B\n"
-                except yf.exceptions.YFRateLimitError as e:
-                    ticker_info += f"- {ticker}: Rate limited. Please try again later.\n"
-                except Exception as e:
-                    ticker_info += f"- {ticker}: Error retrieving data: {str(e)}\n"
-        
-        # Create a combined prompt
         prompt = f"""
         You are a sophisticated stock analysis agent that helps users with financial questions.
         
@@ -626,9 +675,7 @@ async def agent_query(request: AgentQueryRequest):
         factors. Format your response using markdown for readability.
         """
         
-        # Call Groq API
         response = call_groq_api(prompt)
-        
         return {"result": response}
     except ValueError as e:
         return {"error": str(e)}
@@ -643,26 +690,11 @@ async def comprehensive_analysis(ticker: str):
     try:
         require_groq_api_key()
 
-        # Initialize components
-        vectordb = get_shared_vectordb()
-        
-        # Try to refresh vector data; continue with existing docs if Yahoo Finance fails
         data_ingester = DataIngestor()
-        try:
-            data_ingester.fetch_and_ingest_all_data(ticker)
-        except ValueError as e:
-            print(f"Ingest skipped during comprehensive analysis for {ticker}: {e}")
-        
-        # Get stock data for structured fields
         stock_data = data_ingester.fetch_stock_data(ticker)
         company_info = _company_info(stock_data)
-        docs = vectordb.similarity_search(f"{ticker} company financials", k=3)
-        fundamental_context = "\n\n".join([doc.page_content for doc in docs])
-        if not fundamental_context.strip():
-            fundamental_context = (
-                f"Limited vector data for {ticker}. "
-                "Use general market knowledge and the live technical data below."
-            )
+        fundamental_context = _build_fundamental_context(ticker, company_info, stock_data)
+        _, rag_sources = try_rag_search(f"{ticker} company financials", k=3)
         
         # Get live data using yfinance for technical analysis
         import numpy as np
@@ -828,7 +860,7 @@ async def comprehensive_analysis(ticker: str):
             },
             "rag_insights": {
                 "answer": outlook,
-                "sources": [doc.metadata for doc in docs]
+                "sources": rag_sources
             }
         }
         
@@ -871,17 +903,10 @@ async def optimize_portfolio(request: PortfolioOptimizationRequest):
     try:
         require_groq_api_key()
 
-        # Initialize components
-        vectordb = get_shared_vectordb()
-        
-        # Gather data for each ticker
+        # Portfolio uses live Yahoo Finance + Groq (no vector store required)
         tickers_data = {}
         for ticker in request.tickers:
-            # Get data from vector database
-            docs = vectordb.similarity_search(f"{ticker} analysis", k=1)
-            ticker_context = "\n\n".join([doc.page_content for doc in docs])
-            
-            # Get live data
+            ticker_context = ""
             try:
                 stock = get_stock_ticker(ticker)
                 hist_1d = get_stock_history(stock, period="1d")
@@ -895,15 +920,17 @@ async def optimize_portfolio(request: PortfolioOptimizationRequest):
                     "dividend_yield": info.get("dividendYield", 0)
                 }
                 
-                # Calculate risk and return metrics
                 hist = get_stock_history(stock, period="1y")
                 if not hist.empty:
                     returns = hist["Close"].pct_change().dropna()
-                    current_data["avg_return"] = returns.mean() * 252 * 100  # Annualized
-                    current_data["volatility"] = returns.std() * np.sqrt(252) * 100  # Annualized
+                    current_data["avg_return"] = returns.mean() * 252 * 100
+                    current_data["volatility"] = returns.std() * np.sqrt(252) * 100
+
+                rag_context, _ = try_rag_search(f"{ticker} analysis", k=1)
+                ticker_context = rag_context
                 
                 tickers_data[ticker] = {
-                    "context": ticker_context,
+                    "context": ticker_context or f"Live market data for {ticker}.",
                     "current_data": current_data
                 }
             except yf.exceptions.YFRateLimitError as e:
