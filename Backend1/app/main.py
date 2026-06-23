@@ -1,5 +1,6 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
 import os
@@ -92,17 +93,41 @@ def get_stock_financials(ticker_obj):
 # Add CORS middleware (configure ALLOWED_ORIGINS for production, comma-separated)
 from app.config import ALLOWED_ORIGINS as _allowed_origins_env
 
+DEFAULT_ALLOWED_ORIGINS = [
+    "https://stock-intel-theta.vercel.app",
+    "http://localhost:5174",
+    "http://localhost:5173",
+    "http://localhost:8080",
+]
+
 def _clean_origin(value: str) -> str:
     return value.strip().strip('"').strip("'")
 
+def _origin_allowed(origin: str) -> bool:
+    if not origin:
+        return False
+    if _allowed_origins_raw == "*":
+        return True
+    if origin in _cors_origins:
+        return True
+    import re
+    return bool(
+        re.fullmatch(r"https://[\w-]+\.vercel\.app", origin)
+        or re.fullmatch(r"http://localhost(:\d+)?", origin)
+    )
+
 _allowed_origins_raw = _allowed_origins_env.strip()
-# Always permit Vercel production + preview URLs and local dev
 _origin_regex = r"https://.*\.vercel\.app|http://localhost(:\d+)?"
 
 if _allowed_origins_raw == "*":
     _cors_origins = ["*"]
 else:
-    _cors_origins = [_clean_origin(o) for o in _allowed_origins_raw.split(",") if o.strip()]
+    _cors_origins = list(
+        dict.fromkeys(
+            DEFAULT_ALLOWED_ORIGINS
+            + [_clean_origin(o) for o in _allowed_origins_raw.split(",") if o.strip()]
+        )
+    )
 
 app.add_middleware(
     CORSMiddleware,
@@ -111,7 +136,26 @@ app.add_middleware(
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
+
+@app.middleware("http")
+async def ensure_cors_headers(request: Request, call_next):
+    """Ensure CORS headers are present even on error responses."""
+    origin = request.headers.get("origin", "")
+    try:
+        response = await call_next(request)
+    except Exception as exc:
+        print(f"Unhandled request error: {exc}")
+        response = JSONResponse(status_code=500, content={"error": "Internal server error"})
+
+    if _origin_allowed(origin):
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Vary"] = "Origin"
+    return response
+
+_embeddings_ready = False
+_embeddings_error: str | None = None
 
 # Simple vector store setup
 def setup_embeddings():
@@ -296,6 +340,7 @@ class DataIngestor:
 # Initialize components at startup
 @app.on_event("startup")
 async def startup_event():
+    global _embeddings_ready, _embeddings_error
     print("Initializing components...")
     groq_status = check_groq_api_key()
     if groq_status["valid"]:
@@ -305,9 +350,13 @@ async def startup_event():
 
     try:
         embeddings = setup_embeddings()
-        vectordb = setup_vectordb(embeddings)
+        setup_vectordb(embeddings)
+        _embeddings_ready = True
+        _embeddings_error = None
         print("✅ Components initialized successfully")
     except Exception as e:
+        _embeddings_ready = False
+        _embeddings_error = str(e)
         print(f"❌ Error initializing components: {e}")
 
 # Root endpoint to display all routes
@@ -330,6 +379,13 @@ async def test():
 
 @app.get("/health")
 async def health():
+    """Fast health check for Render deploy probes — must respond in under 5 seconds."""
+    return {"status": "ok", "service": "stockintel-api"}
+
+
+@app.get("/health/status")
+async def health_status():
+    """Detailed status for the frontend dashboard."""
     import chromadb
 
     vector_path = VECTOR_DB_PATH
@@ -344,22 +400,14 @@ async def health():
             doc_count = 0
 
     groq_status = check_groq_api_key()
-    embeddings_ok = True
-    try:
-        setup_embeddings()
-    except Exception as exc:
-        embeddings_ok = False
-        embeddings_error = str(exc)
-    else:
-        embeddings_error = None
 
     return {
-        "status": "ok" if groq_status["valid"] and embeddings_ok else "degraded",
+        "status": "ok" if groq_status["valid"] and _embeddings_ready else "degraded",
         "groq_configured": groq_status["configured"],
         "groq_valid": groq_status["valid"],
         "groq_message": groq_status["message"],
-        "embeddings_ok": embeddings_ok,
-        "embeddings_error": embeddings_error,
+        "embeddings_ok": _embeddings_ready,
+        "embeddings_error": _embeddings_error,
         "vector_db_path": vector_path,
         "vector_db_exists": vector_exists,
         "document_count": doc_count,

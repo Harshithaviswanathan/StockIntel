@@ -60,16 +60,24 @@ export const AppShell: React.FC<AppShellProps> = ({
   useEffect(() => {
     const checkBackend = async () => {
       try {
+        await axios.get(`${API_BASE_URL}/health`, { timeout: 15000 });
+        setBackendOnline(true);
+      } catch {
+        setBackendOnline(false);
+        setGroqValid(null);
+        setGroqMessage(null);
+        return;
+      }
+
+      try {
         const response = await axios.get<{
           status?: string;
           groq_valid?: boolean;
           groq_message?: string;
-        }>(`${API_BASE_URL}/health`, { timeout: 8000 });
-        setBackendOnline(true);
+        }>(`${API_BASE_URL}/health/status`, { timeout: 15000 });
         setGroqValid(response.data.groq_valid ?? null);
         setGroqMessage(response.data.groq_message ?? null);
       } catch {
-        setBackendOnline(false);
         setGroqValid(null);
         setGroqMessage(null);
       }

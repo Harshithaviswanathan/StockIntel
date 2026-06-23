@@ -53,7 +53,7 @@ def check_groq_api_key() -> dict:
         response = requests.get(
             "https://api.groq.com/openai/v1/models",
             headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
-            timeout=8,
+            timeout=5,
         )
         if response.status_code == 200:
             return {"configured": True, "valid": True, "message": "ok"}
