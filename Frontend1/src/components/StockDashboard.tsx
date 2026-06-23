@@ -253,8 +253,11 @@ const StockAgentChat: React.FC<StockAgentChatProps> = ({ ticker, onTickerChange 
     messageEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  const appendMessage = (role: Message["role"], content: string) => {
-    setMessages((prev) => [...prev, { role, content, timestamp: new Date() }]);
+  const appendMessage = (role: Message["role"], content: string | undefined | null) => {
+    setMessages((prev) => [
+      ...prev,
+      { role, content: content ?? "No response received from the server.", timestamp: new Date() },
+    ]);
   };
 
   const handleSendMessage = async (queryText?: string) => {
@@ -266,7 +269,11 @@ const StockAgentChat: React.FC<StockAgentChatProps> = ({ ticker, onTickerChange 
 
     try {
       const response = await axios.post(`${API_BASE_URL}/rag/agent_query`, { query: text });
-      appendMessage("assistant", response.data.result);
+      if (response.data?.error) {
+        appendMessage("assistant", response.data.error);
+      } else {
+        appendMessage("assistant", response.data?.result ?? "No response received from the agent.");
+      }
     } catch (error) {
       appendMessage(
         "assistant",
@@ -290,13 +297,14 @@ const StockAgentChat: React.FC<StockAgentChatProps> = ({ ticker, onTickerChange 
         ticker: ticker.trim() || null,
       });
 
-      const sources = response.data.sources
+      const sources = (response.data?.sources ?? [])
         .map((source: { source: string; ticker?: string }) =>
           `[${source.source}${source.ticker ? ` - ${source.ticker}` : ""}]`
         )
         .join(", ");
 
-      appendMessage("assistant", `${response.data.answer}\n\nSources: ${sources}`);
+      const answer = response.data?.answer ?? response.data?.error ?? "No answer returned.";
+      appendMessage("assistant", sources ? `${answer}\n\nSources: ${sources}` : answer);
     } catch (error) {
       appendMessage(
         "assistant",
@@ -472,10 +480,10 @@ const StockAgentChat: React.FC<StockAgentChatProps> = ({ ticker, onTickerChange 
                     : "bg-white/5 text-slate-200 ring-1 ring-white/10"
                 }`}
               >
-                {message.content.split("\n").map((line, i) => (
+                {(message.content ?? "").split("\n").map((line, i, lines) => (
                   <React.Fragment key={i}>
                     {line}
-                    {i < message.content.split("\n").length - 1 && <br />}
+                    {i < lines.length - 1 && <br />}
                   </React.Fragment>
                 ))}
               </div>
@@ -545,6 +553,11 @@ const ComprehensiveAnalysis: React.FC<ComprehensiveAnalysisProps> = ({
         return;
       }
 
+      if (!response.data.stock_info || !response.data.fundamental_analysis || !response.data.technical_analysis) {
+        setError("Incomplete analysis data received from the server.");
+        return;
+      }
+
       setAnalysis(response.data);
     } catch (error) {
       setError(
@@ -571,7 +584,7 @@ const ComprehensiveAnalysis: React.FC<ComprehensiveAnalysisProps> = ({
         analysis.technical_analysis.analysis,
         "",
         "## RAG Insights",
-        analysis.rag_insights.answer,
+        analysis.rag_insights?.answer ?? "N/A",
       ].join("\n")
     : "";
 
@@ -689,7 +702,7 @@ const ComprehensiveAnalysis: React.FC<ComprehensiveAnalysisProps> = ({
                       </TableRow>
                     </TableHead>
                     <TableBody>
-                      {Object.entries(analysis.fundamental_analysis.metrics).map(([key, value]) => (
+                      {Object.entries(analysis.fundamental_analysis?.metrics ?? {}).map(([key, value]) => (
                         <TableRow key={key}>
                           <TableCell className="text-slate-300">{key}</TableCell>
                           <TableCell className="font-medium text-white">
@@ -709,7 +722,7 @@ const ComprehensiveAnalysis: React.FC<ComprehensiveAnalysisProps> = ({
                       Analyst Summary
                     </div>
                     <p className="text-sm leading-relaxed text-slate-300">
-                      {analysis.fundamental_analysis.analysis}
+                      {analysis.fundamental_analysis?.analysis ?? "No fundamental analysis available."}
                     </p>
                   </div>
                 </CardContent>
@@ -727,7 +740,7 @@ const ComprehensiveAnalysis: React.FC<ComprehensiveAnalysisProps> = ({
                       </TableRow>
                     </TableHead>
                     <TableBody>
-                      {Object.entries(analysis.technical_analysis.indicators).map(([key, value]) => (
+                      {Object.entries(analysis.technical_analysis?.indicators ?? {}).map(([key, value]) => (
                         <TableRow key={key}>
                           <TableCell className="text-slate-300">{key}</TableCell>
                           <TableCell className="font-medium text-white">
@@ -747,7 +760,7 @@ const ComprehensiveAnalysis: React.FC<ComprehensiveAnalysisProps> = ({
                       Technical Outlook
                     </div>
                     <p className="text-sm leading-relaxed text-slate-300">
-                      {analysis.technical_analysis.analysis}
+                      {analysis.technical_analysis?.analysis ?? "No technical analysis available."}
                     </p>
                   </div>
                 </CardContent>
@@ -758,11 +771,11 @@ const ComprehensiveAnalysis: React.FC<ComprehensiveAnalysisProps> = ({
               <Card className="border-white/10 bg-white/5">
                 <CardContent className="pt-6">
                   <p className="whitespace-pre-line text-sm leading-relaxed text-slate-300">
-                    {analysis.rag_insights.answer}
+                    {analysis.rag_insights?.answer ?? "No RAG insights available."}
                   </p>
                   <h4 className="mt-6 text-sm font-semibold text-white">Document Sources</h4>
                   <ul className="mt-3 space-y-2">
-                    {analysis.rag_insights.sources.map((source, index) => (
+                    {(analysis.rag_insights?.sources ?? []).map((source, index) => (
                       <li
                         key={index}
                         className="rounded-lg bg-slate-950/50 px-3 py-2 text-sm text-slate-400"
@@ -861,8 +874,19 @@ const PortfolioOptimizerRAG: React.FC = () => {
         risk_preference: riskPreference,
       });
 
-      setOptimizedPortfolio(response.data.optimized_portfolio);
-      setAnalysis(response.data.analysis);
+      if (response.data?.error) {
+        setError(response.data.error);
+        setOptimizedPortfolio(null);
+        setAnalysis("");
+        return;
+      }
+
+      setOptimizedPortfolio(response.data.optimized_portfolio ?? null);
+      setAnalysis(response.data.analysis ?? "");
+
+      if (!response.data.optimized_portfolio) {
+        setError("Optimization completed but no allocation weights were returned.");
+      }
     } catch (error) {
       setError(extractErrorMessage(error, "Failed to optimize portfolio. Please try again."));
     } finally {
