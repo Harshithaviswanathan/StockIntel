@@ -42,53 +42,21 @@ This project introduces an innovative Retrieval-Augmented Generation (RAG) power
 
 ## 🚀 Getting Started
 
-### 🔧 Local development
-
-**Backend**
+### 🔧 Backend Setup
 
 ```bash
 cd Backend1
 pip install -r requirements.txt
-cp .env.example .env   # add your GROQ_API_KEY
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+uvicorn app.main:app --reload
 ```
 
-**Frontend**
+### 🖥️ Frontend Setup
 
 ```bash
 cd Frontend1
 npm install
-cp .env.example .env   # set VITE_API_URL=http://localhost:8000
 npm run dev
 ```
-
-Open http://localhost:5174
-
-### 🐳 Docker deployment (recommended)
-
-1. Copy `Backend1/.env.example` to `Backend1/.env` and set `GROQ_API_KEY`
-2. From the project root:
-
-```bash
-docker compose up --build
-```
-
-| Service  | URL |
-|----------|-----|
-| Frontend | http://localhost:8080 |
-| Backend  | http://localhost:8000 |
-| Health   | http://localhost:8000/health |
-
-Vector data persists in the Docker volume `chroma_data`.
-
-### ☁️ Cloud deployment checklist
-
-- Set `GROQ_API_KEY` in your host environment (never commit it)
-- Set `ALLOWED_ORIGINS` to your frontend URL(s)
-- Build frontend with `VITE_API_URL=https://your-api-domain.com`
-- Mount a persistent volume at `VECTOR_DB_PATH` (default `/app/data/new_vector_db`)
-- Set `DEBUG=False` in production
-
 
 ## 💡 Potential Applications
 
@@ -102,4 +70,7 @@ Vector data persists in the Docker volume `chroma_data`.
 The system represents a convergence of machine learning, financial data analysis, and artificial intelligence, offering a powerful tool for extracting meaningful insights from complex financial landscapes.
 
 ---
-✨ Developed by HARSHITHA V (22PT12) ✨
+<img width="800" height="505" alt="image" src="https://github.com/user-attachments/assets/55314ad1-f220-4689-b05d-8689d16315af" /> 
+
+<img width="349" height="500" alt="image" src="https://github.com/user-attachments/assets/8d2fc7ff-5bfa-4d4c-b2e3-aba6f40dc10e" /> <img width="366" height="502" alt="image" src="https://github.com/user-attachments/assets/364385ee-c6cc-40a2-a226-5a42663680c6" /> 
+
