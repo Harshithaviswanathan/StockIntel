@@ -14,7 +14,8 @@ from typing import Callable, Any
 from app.config import VECTOR_DB_PATH, DEBUG, PORT, DEFAULT_LLM_MODEL, require_groq_api_key, check_groq_api_key
 from app.utils import extract_tickers_from_query
 
-app = FastAPI(title="StockIntel RAG API", version="1.0.0")
+app = FastAPI(title="StockIntel RAG API", version="1.2.0")
+APP_BUILD = "lazy-embeddings-v2"
 
 load_dotenv()
 
@@ -404,7 +405,7 @@ async def test():
 @app.get("/health")
 async def health():
     """Fast health check for Render deploy probes — must respond in under 5 seconds."""
-    return {"status": "ok", "service": "stockintel-api"}
+    return {"status": "ok", "service": "stockintel-api", "build": APP_BUILD}
 
 
 @app.get("/health/status")
